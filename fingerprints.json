@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "version": "gpt-reference-2026-10-28-nine-models",
+  "algorithm": "ordered-nuisance-hellinger-v1",
+  "bank_file": "assets/fingerprint-gpt-bank.json",
+  "bank_sha256": "77983ea31d9ae0ecf9f2e58001d5f975c3ea2ae7a85a43989ee4294e3b9429a5",
+  "source": {
+    "label": "GPT 数字参考",
+    "repository": "https://github.com/xqy2006/ModelTrace",
+    "revision": "6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2",
+    "path": "data/gpt_bank.json plus explicitly collected model samples",
+    "license_file": "packaging/licenses/ModelTrace-LICENSE.txt",
+    "original_bank_sha256": "94229c6601429c916011b1ce45ac1a87d6ad0d6914368038d0d069effe7201a1"
+  },
+  "coverage": {
+    "models": [
+      "gpt-5.4",
+      "gpt-5.5",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-6.1-sol"
+    ],
+    "providers": [
+      "codex",
+      "openai"
+    ],
+    "effort": "not separately calibrated",
+    "same_context_calibrated": false,
+    "multilingual_calibrated": false,
+    "backend_identity_certified": false
+  },
+  "entries": [
+    {
+      "model": "gpt-5.4",
+      "provider": "codex",
+      "response_count": 36,
+      "effort": null
+    },
+    {
+      "model": "gpt-5.5",
+      "provider": "codex",
+      "response_count": 36,
+      "effort": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "provider": "codex",
+      "response_count": 36,
+      "effort": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "provider": "codex",
+      "response_count": 36,
+      "effort": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "provider": "codex",
+      "response_count": 36,
+      "effort": null
+    },
+    {
+      "model": "gpt-6-astra",
+      "provider": "codex",
+      "response_count": 36,
+      "effort": null
+    },
+    {
+      "model": "gpt-6-sol",
+      "provider": "codex",
+      "response_count": 36,
+      "effort": null
+    },
+    {
+      "model": "gpt-6-luna",
+      "provider": "codex",
+      "response_count": 36,
+      "effort": null
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "provider": "openai",
+      "response_count": 3,
+      "effort": "ultra"
+    }
+  ],
+  "enrollment": {
+    "method": "fixed-reference-projection-v1",
+    "models": 9,
+    "responses": 291,
+    "historical_source_revision": "6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2",
+    "historical_source_path": "data/gpt_reference.jsonl",
+    "historical_response_count": 288,
+    "new_model": "gpt-6.1-sol",
+    "new_response_count": 3,
+    "common_environments": [],
+    "synthetic_environments": false,
+    "holdout_used_for_fit": false,
+    "calibration_scope": "retained eight-class reference temperatures; not nine-class accuracy validation"
+  }
+}

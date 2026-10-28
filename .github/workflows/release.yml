@@ -1,0 +1,219 @@
+name: macOS release
+
+"on":
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional exact version from project.json (for example 1.1.0)"
+        required: false
+        type: string
+
+# Read-only by default. Only the release job may create a tag/release or assets.
+permissions:
+  contents: read
+
+concurrency:
+  group: model-beacon-release-${{ github.repository }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tests:
+    runs-on: macos-14
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Verify Apple Silicon runner
+        run: test "$(uname -m)" = arm64
+      - name: Install build dependencies
+        run: python3 -m pip install -r packaging/requirements-build.txt
+      - name: Run local tests
+        run: python3 -B -m unittest discover -s tests -v
+
+  release:
+    needs: tests
+    runs-on: macos-14
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Verify platform and release version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import platform
+          from pathlib import Path
+          from scripts.package_macos import load_project, validate_version
+          if platform.system() != "Darwin" or platform.machine() != "arm64":
+              raise SystemExit("This release is only validated on macOS arm64.")
+          project = load_project()
+          tag = os.environ["GITHUB_REF_NAME"] if os.environ["GITHUB_EVENT_NAME"] == "push" else None
+          version = validate_version(project, os.environ.get("REQUESTED_VERSION"), tag)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"version={version}\n")
+              output.write(f"tag=v{version}\n")
+              output.write(f"slug={project['slug']}\n")
+          PY
+      - name: Install frozen-runtime build dependencies
+        run: python3 -m pip install -r packaging/requirements-build.txt
+      - name: Configure optional Developer ID signing
+        id: signing
+        env:
+          SIGN_CERT_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          SIGN_CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+          import secrets
+          import subprocess
+          signing = ("SIGN_CERT_P12_BASE64", "SIGN_CERT_PASSWORD", "SIGN_IDENTITY")
+          notary = ("NOTARY_KEY", "NOTARY_KEY_ID", "NOTARY_ISSUER_ID")
+          has_signing = any(os.environ.get(name) for name in signing)
+          has_notary = any(os.environ.get(name) for name in notary)
+          if has_signing and not all(os.environ.get(name) for name in signing):
+              raise SystemExit("Provide all three MACOS_CERTIFICATE_* / MACOS_CODESIGN_IDENTITY secrets, or none.")
+          if has_notary and (not has_signing or not all(os.environ.get(name) for name in notary)):
+              raise SystemExit("Notarization requires complete Developer ID signing and all three APPLE_NOTARY_* secrets.")
+          temporary = Path(os.environ["RUNNER_TEMP"])
+          if has_signing:
+              certificate = temporary / "model-beacon-signing.p12"
+              certificate.write_bytes(base64.b64decode(os.environ["SIGN_CERT_P12_BASE64"], validate=True))
+              certificate.chmod(0o600)
+              keychain = temporary / "model-beacon-signing.keychain-db"
+              password = secrets.token_hex(32)
+              print(f"::add-mask::{password}")
+              def security(*arguments):
+                  subprocess.run(["/usr/bin/security", *map(str, arguments)], check=True, capture_output=True)
+              security("create-keychain", "-p", password, keychain)
+              security("set-keychain-settings", "-lut", "21600", keychain)
+              security("unlock-keychain", "-p", password, keychain)
+              security("import", certificate, "-P", os.environ["SIGN_CERT_PASSWORD"], "-k", keychain,
+                       "-T", "/usr/bin/codesign", "-T", "/usr/bin/security")
+              security("list-keychains", "-d", "user", "-s", keychain)
+              security("set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-k", password, keychain)
+          if has_notary:
+              key = temporary / "model-beacon-notary.p8"
+              key.write_text(os.environ["NOTARY_KEY"], encoding="utf-8")
+              key.chmod(0o600)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"notarize={'true' if has_notary else 'false'}\n")
+          print("Developer ID signing enabled." if has_signing else "Ad-hoc signature only; this build is not Apple-notarized.")
+          PY
+      - name: Build self-contained release application
+        env:
+          CODE_SIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+        run: python3 build_macos.py --release --arch arm64
+      - name: Create ZIP, DMG, manifest and checksums
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          DO_NOTARIZE: ${{ steps.signing.outputs.notarize }}
+          CODE_SIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          APPLE_NOTARY_KEY_PATH: ${{ runner.temp }}/model-beacon-notary.p8
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          arguments=(--version "$RELEASE_VERSION" --arch arm64)
+          if [ "$DO_NOTARIZE" = true ]; then
+            arguments+=(--notarize)
+          fi
+          python3 scripts/package_macos.py "${arguments[@]}"
+          (cd dist/packages && shasum -a 256 -c SHA256SUMS.txt)
+      - name: Keep installable artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.version.outputs.slug }}-${{ steps.version.outputs.version }}-macos-arm64
+          path: dist/packages/*
+          if-no-files-found: error
+          compression-level: 0
+      - name: Publish this commit's version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          from scripts.package_macos import load_project
+          project = load_project()
+          tag = os.environ["RELEASE_TAG"]
+          repository = os.environ["GH_REPO"]
+          commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          reference = subprocess.run(["gh", "api", f"repos/{repository}/git/ref/tags/{tag}"], capture_output=True, text=True)
+          if reference.returncode == 0:
+              target = json.loads(reference.stdout)["object"]
+              for _ in range(8):
+                  if target["type"] != "tag":
+                      break
+                  target = json.loads(subprocess.check_output([
+                      "gh", "api", f"repos/{repository}/git/tags/{target['sha']}"
+                  ], text=True))["object"]
+              if target["type"] != "commit" or target["sha"] != commit:
+                  raise SystemExit("The version tag already points to another commit; refusing to replace its release.")
+          elif "HTTP 404" not in reference.stderr:
+              raise SystemExit("Cannot verify the existing release tag; publication stopped.")
+          directory = Path("dist/packages")
+          assets = sorted(str(path) for path in directory.iterdir() if path.is_file())
+          manifest = json.loads(next(directory.glob("*-manifest.json")).read_text(encoding="utf-8"))
+          signature = manifest["signing"]["kind"]
+          notarized = manifest["signing"]["notarized"]
+          signing_note = "Developer ID signed and Apple-notarized." if notarized else f"Signature: {signature}; not Apple-notarized. macOS Gatekeeper may require explicit approval."
+          notes = Path(os.environ["RUNNER_TEMP"]) / "model-beacon-release-notes.md"
+          notes.write_text(
+              f"{project['display_name']} / {project['product_name']} {project['version']}\n\n"
+              f"macOS {project['minimum_macos']}+ on Apple Silicon (arm64). Python is included.\n\n"
+              "Open the DMG and drag the app to Applications, or extract the ZIP and move the app to Applications.\n\n"
+              f"{signing_note}\n\nVerify downloads against SHA256SUMS.txt.\n", encoding="utf-8")
+          existing = subprocess.run(["gh", "release", "view", tag], capture_output=True, text=True)
+          if existing.returncode == 0:
+              subprocess.run(["gh", "release", "upload", tag, *assets, "--clobber"], check=True)
+              subprocess.run(["gh", "release", "edit", tag, "--notes-file", str(notes)], check=True)
+          else:
+              # A manual run without an existing tag creates vVERSION at this
+              # checked-out commit, never implicitly at the default branch HEAD.
+              command = ["gh", "release", "create", tag, *assets, "--target", commit,
+                         "--title", f"{project['product_name']} {project['version']}", "--notes-file", str(notes)]
+              if os.environ["GITHUB_EVENT_NAME"] == "push":
+                  command.append("--verify-tag")
+              subprocess.run(command, check=True)
+          PY
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/model-beacon-signing.keychain-db"
+          if [ -f "$keychain" ]; then
+            /usr/bin/security delete-keychain "$keychain"
+          fi
+          rm -f "$RUNNER_TEMP/model-beacon-signing.p12" "$RUNNER_TEMP/model-beacon-notary.p8"

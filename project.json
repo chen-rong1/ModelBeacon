@@ -1,0 +1,10 @@
+{
+  "product_name": "Model Beacon",
+  "display_name": "模型灯塔",
+  "slug": "model-beacon",
+  "version": "1.2.3",
+  "bundle_identifier": "app.modelbeacon.desktop",
+  "executable_name": "ModelBeacon",
+  "minimum_macos": "13.0",
+  "description": "Codex 会话数字指纹归因，支持冻结快照后台采样与轻量桌面悬浮工具。"
+}
